@@ -1,0 +1,182 @@
+function Final_Sonar_Project()
+% CEP: PASSIVE SONAR
+% FIXED:
+% 1. Blue Submarine Distance (Equalized Source Power)
+% 2. Speed (Reduced to "Silent Running" speed 0.5 m/s)
+
+clc; clear; close all;
+
+% 1. SYSTEM CONFIGURATION
+Fs = 8000;
+Update_Rate = 0.1;
+c = 1500;
+num_sensors = 8;
+spacing = 1.5;
+Map_Limit = 2000;
+
+% DISTANCE CALIBRATION
+Ref_Power = 150;
+
+% 2. ENEMY SUBMARINES SETUP
+% Sub A: "The Pinger"
+SubA.Pos = [-1000, 1500];
+SubA.Vel = [0.8, -0.5];
+SubA.Freq = 800;
+SubA.Power = 100000;
+
+% Sub B: "The Turbine"
+SubB.Pos = [1000, 1200];
+SubB.Vel = [-0.5, -0.3];
+SubB.Freq = 400;
+SubB.Power = 100000;
+
+% 3. GUI SETUP
+hFig = figure('Name', 'PASSIVE SONAR COMBINED SYSTEM', 'Color', 'k', ...
+    'Position', [50, 100, 1400, 600]);
+
+% PANEL 1: REALITY
+subplot(1,3,1);
+plot(0,0,'g^', 'MarkerSize', 12, 'MarkerFaceColor', 'g'); hold on;
+hTrueA = plot(SubA.Pos(1), SubA.Pos(2), 'rv', 'MarkerFaceColor', 'r');
+hTrueB = plot(SubB.Pos(1), SubB.Pos(2), 'bs', 'MarkerFaceColor', 'b');
+
+rectangle('Position', [-Map_Limit -Map_Limit 2*Map_Limit 2*Map_Limit], ...
+    'EdgeColor', 'w', 'LineStyle', '--');
+xlim([-Map_Limit Map_Limit]); ylim([0 Map_Limit]); grid on;
+title('REALITY (Simulation Truth)', 'Color', 'w');
+xlabel('Meters'); ylabel('Meters');
+set(gca, 'Color', [0.1 0.1 0.1], 'XColor', 'w', 'YColor', 'w');
+legend('My Sub', 'Target A', 'Target B', 'Location', 'southoutside', 'Color', 'w');
+
+% PANEL 2: SONAR DISPLAY
+temp_ax = subplot(1,3,2); pos = temp_ax.Position; delete(temp_ax);
+hAx = polaraxes('Position', pos, 'Color', 'k', 'GridColor', 'g', ...
+    'RColor', 'g', 'ThetaColor', 'g', 'ThetaZeroLocation', 'top', ...
+    'ThetaDir', 'clockwise');
+hold(hAx, 'on'); rlim(hAx, [0 Map_Limit]); 
+title(hAx, 'SONAR DISPLAY (Calculated)', 'Color', 'w');
+
+hPlotA = polarplot(hAx, 0, 0, 'rv', 'MarkerSize', 12, 'MarkerFaceColor', 'r');
+hPlotB = polarplot(hAx, 0, 0, 'bs', 'MarkerSize', 12, 'MarkerFaceColor', 'b');
+hTextA = text(hAx, 0, 0, '', 'Color', 'r', 'FontSize', 10, 'FontWeight', 'bold');
+hTextB = text(hAx, 0, 0, '', 'Color', 'c', 'FontSize', 10, 'FontWeight', 'bold');
+
+% PANEL 3: BEAMFORMER
+subplot(1,3,3);
+hLine = plot(nan, nan, 'g-', 'LineWidth', 2);
+set(gca, 'Color', 'k', 'XColor', 'w', 'YColor', 'w');
+title('BEAMFORMER SPECTRUM', 'Color', 'w');
+grid on;
+xlabel('Bearing'); ylabel('Normalized Power'); xlim([-90 90]); ylim([0 1]);
+
+% 4. MAIN LOOP
+step = 0;
+while ishandle(hFig)
+    step = step + 1;
+
+    % A. PHYSICS GENERATOR
+    SubA.Pos = SubA.Pos + SubA.Vel;
+    SubB.Pos = SubB.Pos + SubB.Vel;
+
+    % Bounce Logic (Infinite Play)
+    if abs(SubA.Pos(1))>Map_Limit, SubA.Vel(1)=-SubA.Vel(1); end
+    if abs(SubA.Pos(2))>Map_Limit || SubA.Pos(2)<100, SubA.Vel(2)=-SubA.Vel(2); end
+    if abs(SubB.Pos(1))>Map_Limit, SubB.Vel(1)=-SubB.Vel(1); end
+    if abs(SubB.Pos(2))>Map_Limit || SubB.Pos(2)<100, SubB.Vel(2)=-SubB.Vel(2); end
+
+    set(hTrueA, 'XData', SubA.Pos(1), 'YData', SubA.Pos(2));
+    set(hTrueB, 'XData', SubB.Pos(1), 'YData', SubB.Pos(2));
+
+    [theta_A, dist_A_True] = cart2pol(SubA.Pos(1), SubA.Pos(2));
+    [theta_B, dist_B_True] = cart2pol(SubB.Pos(1), SubB.Pos(2));
+
+    Bearing_A = 90 - rad2deg(theta_A);
+    Bearing_B = 90 - rad2deg(theta_B);
+
+    t = 0:1/Fs:Update_Rate-1/Fs;
+    Sound_A = sin(2*pi*SubA.Freq*t);
+    Sound_B = sin(2*pi*SubB.Freq*t);
+
+    Array_Data = zeros(length(t), num_sensors);
+    for k = 1:num_sensors
+        d = (k-1) * spacing;
+        tau_A = (d * sind(Bearing_A)) / c;
+        tau_B = (d * sind(Bearing_B)) / c;
+
+        Sig_A = (SubA.Power / dist_A_True) * Sound_A .* exp(-1j*2*pi*SubA.Freq*tau_A);
+        Sig_B = (SubB.Power / dist_B_True) * Sound_B .* exp(-1j*2*pi*SubB.Freq*tau_B);
+
+        Array_Data(:,k) = real(Sig_A) + real(Sig_B) + 0.5*randn(size(t));
+    end
+
+    % FIXED SCALING
+    Array_Data = Array_Data / 2000;
+    audiowrite('internal_buffer.wav', Array_Data, Fs);
+
+    % B. PROCESSOR
+    try, [Rec_Data, ~] = audioread('internal_buffer.wav'); catch, continue; end
+    scan_angles = -90:3:90;
+    Power_Map_Raw = zeros(size(scan_angles));
+
+    for i = 1:length(scan_angles)
+        theta = scan_angles(i);
+        Summed_Sig = zeros(length(Rec_Data), 1);
+        for k = 1:num_sensors
+            d = (k-1) * spacing;
+            tau = (d * sind(theta)) / c;
+            shift = round(tau * Fs);
+            col = Rec_Data(:, k);
+            if shift > 0, col = [zeros(shift, 1); col(1:end-shift)];
+            elseif shift < 0, col = [col(-shift+1:end); zeros(-shift, 1)]; end
+            Summed_Sig = Summed_Sig + col;
+        end
+        Power_Map_Raw(i) = mean(Summed_Sig.^2);
+    end
+
+    % Normalized plot for graph
+    Power_Map_Plot = Power_Map_Raw / max(Power_Map_Raw);
+    set(hLine, 'XData', scan_angles, 'YData', Power_Map_Plot);
+
+    % Detection
+    [~, locs] = findpeaks(Power_Map_Plot, 'MinPeakHeight', 0.2, 'MinPeakDistance', 5);
+    detected_angles = scan_angles(locs);
+
+    if isvalid(hPlotA), set(hPlotA, 'RData', 0); set(hTextA, 'String', ''); end
+    if isvalid(hPlotB), set(hPlotB, 'RData', 0); set(hTextB, 'String', ''); end
+    est_dist_A = 0; est_dist_B = 0;
+
+    for idx = locs
+        ang = scan_angles(idx);
+        % CALCULATION with NEW CALIBRATION
+        raw_power_val = Power_Map_Raw(idx);
+        est_dist = Ref_Power / sqrt(raw_power_val);
+
+        % Clamp limits
+        if est_dist > Map_Limit, est_dist = Map_Limit; end
+        if est_dist < 50, est_dist = 50; end
+
+        if ang > 10 || (ang > -90 && ang < -10)
+            est_dist_A = est_dist;
+            if isvalid(hPlotA)
+                set(hPlotA, 'ThetaData', deg2rad(ang), 'RData', est_dist);
+                set(hTextA, 'Position', [deg2rad(ang), est_dist+200], ...
+                    'String', sprintf('A: %d\\n%.0fm', ang, est_dist));
+            end
+        else
+            est_dist_B = est_dist;
+            if isvalid(hPlotB)
+                set(hPlotB, 'ThetaData', deg2rad(ang), 'RData', est_dist);
+                set(hTextB, 'Position', [deg2rad(ang), est_dist+200], ...
+                    'String', sprintf('B: %d\\n%.0fm', ang, est_dist));
+            end
+        end
+    end
+
+    if mod(step, 10) == 0
+        fprintf('SUB A (Red)  | Truth: %-5.0f | Calc: %-5.0f\n', dist_A_True, est_dist_A);
+        fprintf('SUB B (Blue) | Truth: %-5.0f | Calc: %-5.0f\n', dist_B_True, est_dist_B);
+        fprintf('--------------------------------------------------\n');
+    end
+    drawnow limitrate;
+end
+end
